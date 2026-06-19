@@ -128,3 +128,27 @@ class AdvisoryMemory:
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"Failed to update advisory memory outcome: {exc}")
             return False
+
+    def list_recent(self, n: int = 20) -> List[dict]:
+        """Return stored situations (most recent first) for browsing in the dashboard."""
+        if not self._collection:
+            return []
+        try:
+            stored = self._collection.get()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"Failed to list advisory memory: {exc}")
+            return []
+        items: List[dict] = []
+        for thread_id, meta in zip(stored.get("ids", []), stored.get("metadatas", [])):
+            meta = meta or {}
+            items.append(
+                {
+                    "thread_id": thread_id,
+                    "ticker": meta.get("ticker", ""),
+                    "date": meta.get("date", ""),
+                    "recommendation": meta.get("recommendation", ""),
+                    "outcome": meta.get("outcome", ""),
+                }
+            )
+        items.sort(key=lambda x: (x.get("date", ""), x.get("thread_id", "")), reverse=True)
+        return items[:n]
