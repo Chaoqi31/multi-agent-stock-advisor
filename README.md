@@ -10,7 +10,7 @@ This is an **analysis advisor** — it generates research only and never places 
 ## Features
 
 - **27 MCP data tools** — quotes, financial statements, valuation, indices, macro, and news,
-  behind a Model Context Protocol server (Yahoo Finance with a Stooq fallback).
+  behind a Model Context Protocol server (real market data via yfinance, with a per-run cache).
 - **Parallel ReAct analysts** — fundamentals, technicals, valuation, and news run concurrently.
 - **Bull/bear research debate** — opposing researchers debate the findings, bounded by
   `MAX_DEBATE_ROUNDS`, and a research manager synthesizes a balanced conclusion.
