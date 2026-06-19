@@ -209,6 +209,11 @@ async def summary_agent(state: AgentState) -> Dict[str, Any]:
     value_analysis = current_data.get("value_analysis", "Not available")
     news_analysis = current_data.get("news_analysis", "Not available")
 
+    # Upgrade inputs: research debate conclusion, risk disclosure, and retrieved memory
+    debate_conclusion = current_data.get("debate_conclusion", "")
+    risk_disclosure = current_data.get("risk_disclosure", "")
+    memory_context = current_data.get("memory_context", "")
+
     # Handle the error information from each analysis
     errors = []
     if "fundamental_analysis_error" in current_data:
@@ -283,7 +288,10 @@ async def summary_agent(state: AgentState) -> Dict[str, Any]:
         
         ## 综合评估
         [分析不同分析方法之间的一致点和分歧点，提供更全面的投资视角]
-        
+
+        ## 多空观点辩论
+        [总结多方与空方的核心分歧，呈现研究主管的均衡结论、倾向判断与需要跟踪的关键指标]
+
         ## 风险因素
         [详细分析潜在的风险因素，包括市场风险、行业风险、公司特定风险等]
         
@@ -327,7 +335,16 @@ async def summary_agent(state: AgentState) -> Dict[str, Any]:
         
         NEWS ANALYSIS:
         {news_analysis}
-        
+
+        多空辩论结论 (RESEARCH DEBATE CONCLUSION, 用于"多空观点辩论"章节):
+        {debate_conclusion or "（本次无辩论结论）"}
+
+        风险披露要点 (RISK DISCLOSURE, 请整合进"风险因素"章节):
+        {risk_disclosure or "（无）"}
+
+        历史参考 (SIMILAR PAST SITUATIONS, 可用于校准判断):
+        {memory_context or "（无历史记录）"}
+
         {"ANALYSIS ISSUES:" if errors else ""}
         {". ".join(errors) if errors else ""}
         
