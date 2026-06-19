@@ -72,17 +72,23 @@ with st.sidebar:
 st.title("📈 美股投资顾问 Agent")
 st.caption("多 Agent 研究系统：并行分析 → 多空辩论 → 风险披露 → 综合报告。仅出研究报告，不做交易决策。")
 
-query = st.text_input("输入分析需求", value="", placeholder=EXAMPLES[0])
+st.markdown("**快速开始**（点击示例直接分析）")
 cols = st.columns(len(EXAMPLES))
-for col, ex in zip(cols, EXAMPLES):
-    if col.button(ex, use_container_width=True):
-        query = ex
+chosen = None
+for i, (col, ex) in enumerate(zip(cols, EXAMPLES)):
+    if col.button(ex, key=f"ex_{i}", use_container_width=True):
+        chosen = ex
+
+query = st.text_input("或自定义输入分析需求", value="", placeholder=EXAMPLES[0])
 run_clicked = st.button("🚀 开始分析", type="primary", use_container_width=True)
 
+# An example click runs immediately; otherwise the run button uses the text box.
+effective_query = chosen or (query.strip() if run_clicked else "")
+
 # ----------------------------------------------------------------------------- run
-if run_clicked and query.strip():
+if effective_query:
+    st.markdown(f"### 🔍 正在分析：{effective_query}")
     done_nodes = set()
-    st.subheader("⏳ 分析进度")
     progress_box = st.empty()
     _render_progress(progress_box, done_nodes)
 
@@ -91,8 +97,8 @@ if run_clicked and query.strip():
         _render_progress(progress_box, done_nodes)
 
     try:
-        with st.spinner("多 Agent 分析进行中…（约 1–5 分钟，取决于行情接口）"):
-            thread_id, data = asyncio.run(run_analysis(query.strip(), rounds, on_node))
+        with st.spinner("多 Agent 分析进行中…（约 1–3 分钟）"):
+            thread_id, data = asyncio.run(run_analysis(effective_query, rounds, on_node))
         st.session_state["result"] = {"thread_id": thread_id, "data": data}
         st.session_state.pop("view_history", None)
     except Exception as exc:  # noqa: BLE001
