@@ -20,6 +20,8 @@ This is an **analysis advisor** — it generates research only and never places 
 - **Resumable runs** — every run is checkpointed to SQLite and can be resumed by `thread_id`.
 - **Optional local models** — Qwen-LoRA news scoring is off by default; the LLM API handles
   sentiment/risk so it runs with no GPU.
+- **Web dashboard** — a Streamlit app (`app.py`) with live per-agent progress, the rendered
+  report, a side-by-side bull/bear debate view, and memory browsing with reflection.
 
 ## Architecture
 
@@ -81,6 +83,9 @@ uv run python src/main.py --command "分析 Apple (AAPL)"
 # Resume an interrupted run, or backfill a realized outcome into memory
 uv run python src/main.py --resume <thread_id>
 uv run python src/main.py --reflect <thread_id> --outcome "AAPL +6% over 5 trading days"
+
+# Or launch the web dashboard (live agent progress, report, debate view, memory)
+uv run streamlit run app.py
 ```
 
 Only an OpenAI-compatible API key is required to run locally. The optional Qwen-LoRA news
