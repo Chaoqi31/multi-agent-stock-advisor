@@ -99,6 +99,7 @@ async def run_analysis(
                 situation=final_data.get("final_report", "")[:2000],
                 recommendation=final_data.get("debate_conclusion", "")[:1000],
                 date=final_data.get("current_date", ""),
+                report_path=final_data.get("report_path", ""),
             )
     except Exception:  # noqa: BLE001 - memory is best-effort
         pass

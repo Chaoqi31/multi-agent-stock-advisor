@@ -50,7 +50,8 @@ class AdvisoryMemory:
     def available(self) -> bool:
         return self._collection is not None
 
-    def store(self, thread_id: str, ticker: str, situation: str, recommendation: str, date: str) -> None:
+    def store(self, thread_id: str, ticker: str, situation: str, recommendation: str,
+              date: str, report_path: str = "") -> None:
         """Persist (or overwrite) the situation for a run, keyed by thread_id."""
         if not self._collection or not thread_id:
             return
@@ -65,6 +66,7 @@ class AdvisoryMemory:
                         "ticker": (ticker or "").upper(),
                         "date": date,
                         "recommendation": recommendation[:1000],
+                        "report_path": report_path or "",
                         "outcome": "",
                         "return_metrics": "",
                     }
@@ -139,7 +141,10 @@ class AdvisoryMemory:
             logger.warning(f"Failed to list advisory memory: {exc}")
             return []
         items: List[dict] = []
-        for thread_id, meta in zip(stored.get("ids", []), stored.get("metadatas", [])):
+        ids = stored.get("ids", [])
+        metas = stored.get("metadatas", []) or [{}] * len(ids)
+        docs = stored.get("documents", []) or [""] * len(ids)
+        for thread_id, meta, doc in zip(ids, metas, docs):
             meta = meta or {}
             items.append(
                 {
@@ -148,6 +153,8 @@ class AdvisoryMemory:
                     "date": meta.get("date", ""),
                     "recommendation": meta.get("recommendation", ""),
                     "outcome": meta.get("outcome", ""),
+                    "report_path": meta.get("report_path", ""),
+                    "situation": doc or "",
                 }
             )
         items.sort(key=lambda x: (x.get("date", ""), x.get("thread_id", "")), reverse=True)

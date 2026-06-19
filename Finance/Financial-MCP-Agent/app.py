@@ -4,6 +4,7 @@ Run with:  uv run streamlit run app.py
 """
 
 import asyncio
+import glob
 import os
 import sys
 
@@ -21,6 +22,20 @@ from src.memory.advisory_memory import AdvisoryMemory
 st.set_page_config(page_title="US Equity Advisor Agent", page_icon="📈", layout="wide")
 
 EXAMPLES = ["分析 Apple (AAPL)", "分析英伟达 (NVDA)", "看看 Tesla (TSLA) 怎么样", "Microsoft (MSFT) 值得投资吗"]
+_REPORTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "reports")
+
+
+def _resolve_report(item):
+    """Full report markdown for a stored history item: from its saved path, else newest
+    on-disk report for the ticker, else the truncated situation summary."""
+    path = item.get("report_path", "")
+    if path and os.path.exists(path):
+        return open(path, encoding="utf-8").read()
+    ticker = item.get("ticker", "")
+    matches = sorted(glob.glob(os.path.join(_REPORTS_DIR, f"report_*_{ticker}_*.md")))
+    if matches:
+        return open(matches[-1], encoding="utf-8").read()
+    return item.get("situation", "")
 
 
 def _render_progress(placeholder, done_nodes):
@@ -41,10 +56,15 @@ with st.sidebar:
     st.subheader("🧠 历史分析")
     recent = AdvisoryMemory().list_recent(15)
     if recent:
+        st.caption("点击查看历史报告")
         for item in recent:
-            outcome = item.get("outcome") or "—"
-            st.markdown(f"**{item.get('ticker','?')}** · {item.get('date','')}  \n"
-                        f"结果: {outcome[:60]}")
+            label = f"📄 {item.get('ticker','?')} · {item.get('date','')}"
+            if st.button(label, key=f"hist_{item['thread_id']}", use_container_width=True):
+                st.session_state["view_history"] = item
+                st.session_state.pop("result", None)
+            outcome = item.get("outcome")
+            if outcome:
+                st.caption(f"　实际结果: {outcome[:40]}")
     else:
         st.caption("暂无历史记录")
 
@@ -74,6 +94,7 @@ if run_clicked and query.strip():
         with st.spinner("多 Agent 分析进行中…（约 1–5 分钟，取决于行情接口）"):
             thread_id, data = asyncio.run(run_analysis(query.strip(), rounds, on_node))
         st.session_state["result"] = {"thread_id": thread_id, "data": data}
+        st.session_state.pop("view_history", None)
     except Exception as exc:  # noqa: BLE001
         st.error(f"分析失败：{exc}")
 
@@ -119,3 +140,17 @@ if result:
             if st.form_submit_button("提交回填"):
                 ok = AdvisoryMemory().update_with_outcome(tid, outcome or "（未填写）")
                 st.success("已回填") if ok else st.error("未找到该 thread_id")
+
+# --------------------------------------------------------------------- history view
+history = st.session_state.get("view_history")
+if not result and history:
+    st.subheader(f"📄 历史报告 · {history.get('ticker', '?')} · {history.get('date', '')}")
+    if history.get("outcome"):
+        st.info(f"实际结果（已回填）: {history['outcome']}")
+    if st.button("← 返回"):
+        st.session_state.pop("view_history", None)
+    report_md = _resolve_report(history)
+    if report_md:
+        st.markdown(report_md)
+    else:
+        st.warning("无可显示的报告内容（完整报告文件可能已被清理）")
