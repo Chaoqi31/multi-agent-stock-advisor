@@ -47,15 +47,12 @@ from src.utils.state_definition import AgentState
 from src.utils.execution_logger import initialize_execution_logger, finalize_execution_logger, get_execution_logger
 from src.utils.stock_identifier import extract_stock_info as extract_us_stock_info, normalize_stock_code
 
-# Agent module imports - the five core analysis agents
-from src.agents.summary_agent import summary_agent      # Summary agent: consolidates all analysis results
-from src.agents.value_agent import value_agent          # Valuation agent: analyzes the stock's valuation level
-from src.agents.technical_agent import technical_agent  # Technical analysis agent: analyzes price trends and technical indicators
-from src.agents.fundamental_agent import fundamental_agent  # Fundamental agent: analyzes financial condition and profitability
-from src.agents.news_agent import news_agent            # News analysis agent: analyzes news sentiment and risk
+# Workflow graph builder (analysts -> debate -> risk disclosure -> summary)
+from src.graph.build_graph import build_workflow
+from src.memory.advisory_memory import AdvisoryMemory
 
-# LangGraph workflow framework imports
-from langgraph.graph import StateGraph, END
+# LangGraph checkpointer for resumable runs
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 # Environment variable and system related imports
 from dotenv import load_dotenv
@@ -110,40 +107,10 @@ async def main():
         # 1. Define the LangGraph workflow
         # ============================================================================
 
-        # Create the workflow graph, using AgentState as the state type
-        workflow = StateGraph(AgentState)
-
-        # Add the start node - serving as a clear starting point for the parallel branches
-        workflow.add_node("start_node", lambda state: state)
-
-        # Add the five core agent nodes
-        workflow.add_node("fundamental_analyst", fundamental_agent)  # Fundamental analysis agent
-        workflow.add_node("technical_analyst", technical_agent)      # Technical analysis agent
-        workflow.add_node("value_analyst", value_agent)             # Valuation analysis agent
-        workflow.add_node("news_analyst", news_agent)               # News analysis agent
-        workflow.add_node("summarizer", summary_agent)              # Summary agent
-
-        # Set the workflow entry point
-        workflow.set_entry_point("start_node")
-
-        # Add the parallel-execution edges - four analysis agents execute in parallel
-        workflow.add_edge("start_node", "fundamental_analyst")
-        workflow.add_edge("start_node", "technical_analyst")
-        workflow.add_edge("start_node", "value_analyst")
-        workflow.add_edge("start_node", "news_analyst")
-
-        # Add the convergence edges - all analysis results converge to the summary agent
-        # LangGraph ensures that "summarizer" waits for all direct predecessor nodes to complete
-        workflow.add_edge("fundamental_analyst", "summarizer")
-        workflow.add_edge("technical_analyst", "summarizer")
-        workflow.add_edge("value_analyst", "summarizer")
-        workflow.add_edge("news_analyst", "summarizer")
-
-        # Add the end edge - the workflow ends after the summary agent completes
-        workflow.add_edge("summarizer", END)
-
-        # Compile the workflow
-        app = workflow.compile()
+        # Build the workflow graph: memory retrieval -> four parallel analysts ->
+        # bull/bear debate -> research manager -> risk disclosure -> summarizer.
+        # It is compiled later with a checkpointer so runs can be resumed by thread_id.
+        workflow = build_workflow()
 
         # ============================================================================
         # 2. Implement the command-line interface
@@ -157,10 +124,45 @@ async def main():
             required=False,  # Changed to optional, to support interactive input
             help="The user query for financial analysis (e.g., '分析 Apple (AAPL)')"
         )
+        parser.add_argument(
+            "--resume", type=str, default=None, metavar="THREAD_ID",
+            help="Resume an interrupted run from its last checkpoint, by thread_id"
+        )
+        parser.add_argument(
+            "--reflect", type=str, default=None, metavar="THREAD_ID",
+            help="Backfill the realized outcome of a past run into advisory memory, then exit"
+        )
+        parser.add_argument(
+            "--outcome", type=str, default=None,
+            help="Outcome text to store with --reflect (e.g. 'AAPL +6%% over 5 trading days')"
+        )
+        parser.add_argument(
+            "--max-debate-rounds", type=int, default=None,
+            help="Number of bull/bear debate rounds (overrides the MAX_DEBATE_ROUNDS env var)"
+        )
         args = parser.parse_args()
 
+        # Allow the debate depth to be set from the CLI
+        if args.max_debate_rounds is not None:
+            os.environ["MAX_DEBATE_ROUNDS"] = str(args.max_debate_rounds)
+
+        # Reflection path: backfill a realized outcome into memory for a past run, then exit.
+        if args.reflect:
+            outcome = args.outcome or "（未提供具体结果文本）"
+            stored = AdvisoryMemory().update_with_outcome(args.reflect, outcome)
+            if stored:
+                print(f"{SUCCESS_ICON} Reflection stored for run '{args.reflect}'.")
+            else:
+                print(f"{ERROR_ICON} No stored run found for thread_id '{args.reflect}'.")
+            finalize_execution_logger(success=stored)
+            return
+
         # Handle the user query input
-        if args.command:
+        if args.resume:
+            # Resuming: no new query; the saved checkpoint carries the prior state.
+            user_query = None
+            logger.info(f"Resuming previous run with thread_id={args.resume}")
+        elif args.command:
             # If the query is provided via a command-line argument
             user_query = args.command
         else:
@@ -243,8 +245,8 @@ async def main():
         # 3. Natural language processing and stock information extraction
         # ============================================================================
 
-        # Extract the US ticker and company name from the query
-        company_name, stock_code = extract_us_stock_info(user_query)
+        # Extract the US ticker and company name from the query (skipped when resuming)
+        company_name, stock_code = extract_us_stock_info(user_query) if user_query else (None, None)
 
         # Log the extraction result
         logger.info(f"Extracted from query - company name: {company_name}, stock ticker: {stock_code}")
@@ -302,26 +304,54 @@ async def main():
         # 6. Execute the workflow
         # ============================================================================
 
+        # Derive the run's thread_id (resume reuses the supplied one) for checkpointing.
+        thread_id = args.resume or (
+            f"{initial_data.get('stock_code', 'NA')}_{current_datetime.strftime('%Y%m%d_%H%M%S')}"
+        )
+
         # Display the analysis start information
-        print(f"\n{WAIT_ICON} Starting financial analysis for '{user_query}'...")
-        if company_name:
-            print(f"{WAIT_ICON} Analyzing company: {company_name}")
-        if stock_code:
-            print(f"{WAIT_ICON} Stock ticker: {stock_code}")
-        logger.info(
-            f"Starting financial analysis workflow for query: '{user_query}'")
+        if not args.resume:
+            print(f"\n{WAIT_ICON} Starting financial analysis for '{user_query}'...")
+            if company_name:
+                print(f"{WAIT_ICON} Analyzing company: {company_name}")
+            if stock_code:
+                print(f"{WAIT_ICON} Stock ticker: {stock_code}")
+            print(f"\n{WAIT_ICON} Running the four analysts in parallel, then bull/bear debate,")
+            print(f"{WAIT_ICON} risk disclosure and the final summary. This may take a few minutes...\n")
+        else:
+            print(f"\n{WAIT_ICON} Resuming run '{thread_id}' from its last checkpoint...\n")
+        print(f"{WAIT_ICON} Run thread_id: {thread_id}  (use --resume / --reflect with this id)")
+        logger.info(f"Starting workflow (thread_id={thread_id}, resume={bool(args.resume)})")
 
-        # Display the analysis stage prompts
-        print(f"\n{WAIT_ICON} Running fundamental analysis...")
-        print(f"{WAIT_ICON} Running technical analysis...")
-        print(f"{WAIT_ICON} Running valuation analysis...")
-        print(f"{WAIT_ICON} Running news analysis...")
-        print(f"{WAIT_ICON} This may take a few minutes, please be patient...\n")
+        # Compile with a SQLite checkpointer so an interrupted run can be resumed by thread_id.
+        # Passing None as the input resumes from the last saved checkpoint.
+        checkpoint_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "checkpoints")
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        checkpoint_path = os.path.join(checkpoint_dir, "checkpoints.sqlite")
 
-        # Invoke the workflow - this is a blocking call that waits for all agents to complete
-        final_state = await app.ainvoke(initial_state)
+        async with AsyncSqliteSaver.from_conn_string(checkpoint_path) as checkpointer:
+            app = workflow.compile(checkpointer=checkpointer)
+            run_config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 60}
+            workflow_input = None if args.resume else initial_state
+            final_state = await app.ainvoke(workflow_input, config=run_config)
+
         print(f"{SUCCESS_ICON} Analysis complete!")
         logger.info("Workflow execution completed successfully")
+
+        # Persist this run's situation into cross-run memory for future calibration.
+        try:
+            final_data = (final_state or {}).get("data", {})
+            if final_data.get("final_report"):
+                AdvisoryMemory().store(
+                    thread_id=thread_id,
+                    ticker=final_data.get("stock_code", ""),
+                    situation=final_data.get("final_report", "")[:2000],
+                    recommendation=final_data.get("debate_conclusion", "")[:1000],
+                    date=final_data.get("current_date", ""),
+                )
+        except Exception as mem_exc:  # noqa: BLE001 - memory is best-effort
+            logger.warning(f"Could not store advisory memory: {mem_exc}")
 
         # ============================================================================
         # 7. Result processing and report generation
