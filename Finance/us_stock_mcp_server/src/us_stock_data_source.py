@@ -2,12 +2,14 @@ import logging
 import math
 import os
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from io import StringIO
 from typing import Dict, List, Optional
 
 import pandas as pd
 import requests
+import yfinance as yf
 from bs4 import BeautifulSoup
 
 from .data_source_interface import DataSourceError, FinancialDataSource, NoDataFoundError
@@ -22,6 +24,105 @@ def _local_news_models_enabled() -> bool:
     Enable by setting USE_LOCAL_NEWS_MODELS=true together with the QWEN_*_MODEL paths.
     """
     return os.getenv("USE_LOCAL_NEWS_MODELS", "false").strip().lower() in ("1", "true", "yes")
+
+
+# ---------------------------------------------------------------------------
+# yfinance-backed data access with a small process-level cache.
+#
+# A single analysis run calls the same ticker's quote/fundamentals many times
+# across the four analysts; caching turns dozens of upstream requests into one
+# per symbol, which both speeds the run up and avoids self-inflicted rate limits.
+# ---------------------------------------------------------------------------
+
+_CACHE: Dict[tuple, tuple] = {}
+_CACHE_TTL = float(os.getenv("DATA_CACHE_TTL", "300"))  # seconds
+
+
+def _cache_get(key: tuple):
+    item = _CACHE.get(key)
+    if item is not None and (time.time() - item[0]) < _CACHE_TTL:
+        return item[1]
+    return None
+
+
+def _cache_set(key: tuple, value):
+    _CACHE[key] = (time.time(), value)
+    return value
+
+
+def yf_info(symbol: str) -> Dict:
+    """Cached yfinance .info dict (quote + fundamentals) for a symbol."""
+    key = ("info", symbol)
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+    try:
+        info = yf.Ticker(symbol).get_info() or {}
+    except Exception as exc:  # noqa: BLE001 - upstream is best-effort
+        logger.warning(f"yfinance info lookup failed for {symbol}: {exc}")
+        info = {}
+    return _cache_set(key, info)
+
+
+def yf_history(symbol: str, start: str, end: str, interval: str, auto_adjust: bool) -> pd.DataFrame:
+    """Cached yfinance price history. end_date is made inclusive."""
+    key = ("hist", symbol, start, end, interval, auto_adjust)
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+    try:
+        end_inclusive = (datetime.strptime(end, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+        df = yf.Ticker(symbol).history(
+            start=start, end=end_inclusive, interval=interval, auto_adjust=auto_adjust, raise_errors=False
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"yfinance history lookup failed for {symbol}: {exc}")
+        df = pd.DataFrame()
+    return _cache_set(key, df)
+
+
+def yf_actions(symbol: str) -> pd.DataFrame:
+    """Cached yfinance corporate actions (dividends + splits), indexed by date."""
+    key = ("actions", symbol)
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+    try:
+        df = yf.Ticker(symbol).actions
+        if df is None:
+            df = pd.DataFrame()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"yfinance actions lookup failed for {symbol}: {exc}")
+        df = pd.DataFrame()
+    return _cache_set(key, df)
+
+
+def yf_news(symbol: str, top_k: int = 10) -> List[Dict]:
+    """Cached, normalized recent news for a symbol from yfinance (handles both the
+    legacy flat shape and the newer nested {'content': {...}} shape)."""
+    key = ("news", symbol)
+    raw = _cache_get(key)
+    if raw is None:
+        try:
+            raw = yf.Ticker(symbol).news or []
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"yfinance news lookup failed for {symbol}: {exc}")
+            raw = []
+        _cache_set(key, raw)
+
+    items: List[Dict] = []
+    for entry in raw[:top_k]:
+        content = entry.get("content") if isinstance(entry.get("content"), dict) else entry
+        title = content.get("title") or entry.get("title") or ""
+        if not title:
+            continue
+        summary = content.get("summary") or content.get("description") or entry.get("summary") or ""
+        url_obj = content.get("canonicalUrl") or content.get("clickThroughUrl") or {}
+        link = (url_obj.get("url") if isinstance(url_obj, dict) else "") or entry.get("link", "")
+        provider = content.get("provider") or {}
+        source = (provider.get("displayName") if isinstance(provider, dict) else None) or entry.get("publisher") or "Yahoo Finance"
+        items.append({"title": title, "summary": summary, "link": link, "source": source})
+    return items
 
 
 DEFAULT_K_FIELDS = [
@@ -147,77 +248,50 @@ class USStockDataSource(FinancialDataSource):
     ) -> pd.DataFrame:
         symbol = normalize_us_symbol(code)
         interval = _map_interval(frequency)
-        period1 = int(datetime.strptime(start_date, "%Y-%m-%d").timestamp())
-        period2 = int((datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)).timestamp())
-        try:
-            payload = self._get_json(
-                f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
-                params={
-                    "period1": period1,
-                    "period2": period2,
-                    "interval": interval,
-                    "events": "div,splits",
-                    "includeAdjustedClose": "true",
-                },
-            )
-        except DataSourceError as exc:
-            logger.warning(f"Yahoo chart lookup failed for {symbol}, trying Stooq fallback: {exc}")
-            return self._get_stooq_historical_k_data(symbol, start_date, end_date, adjust_flag, fields)
-
-        chart = payload.get("chart", {})
-        if chart.get("error"):
-            raise DataSourceError(f"Yahoo Finance chart error for {symbol}: {chart['error']}")
-
-        results = chart.get("result") or []
-        if not results:
-            raise NoDataFoundError(f"No historical market data found for {symbol}.")
-
-        result = results[0]
-        timestamps = result.get("timestamp") or []
-        quote = ((result.get("indicators") or {}).get("quote") or [{}])[0]
-        adjclose = ((result.get("indicators") or {}).get("adjclose") or [{}])[0].get("adjclose") or []
+        auto_adjust = adjust_flag in ("1", "2")  # "3" = non-adjusted prices
+        df = yf_history(symbol, start_date, end_date, interval, auto_adjust)
 
         rows = []
         previous_close = None
-        for index, timestamp in enumerate(timestamps):
-            close = _list_get(quote.get("close"), index)
-            if close is None:
-                continue
-
-            open_price = _list_get(quote.get("open"), index)
-            high = _list_get(quote.get("high"), index)
-            low = _list_get(quote.get("low"), index)
-            volume = _list_get(quote.get("volume"), index) or 0
-            adjusted_close = _list_get(adjclose, index)
-            pct_change = ""
-            if previous_close not in (None, 0):
-                pct_change = _format_number(((close / previous_close) - 1) * 100)
-
-            row = {
-                "date": datetime.fromtimestamp(timestamp, timezone.utc).strftime("%Y-%m-%d"),
-                "code": symbol,
-                "open": _format_number(open_price),
-                "high": _format_number(high),
-                "low": _format_number(low),
-                "close": _format_number(close),
-                "preclose": _format_number(previous_close),
-                "volume": _format_number(volume),
-                "amount": _format_number(close * volume if close is not None else None),
-                "adjustflag": adjust_flag,
-                "turn": "",
-                "tradestatus": "1",
-                "pctChg": pct_change,
-                "peTTM": "",
-                "pbMRQ": "",
-                "psTTM": "",
-                "pcfNcfTTM": "",
-                "isST": "0",
-                "adjClose": _format_number(adjusted_close),
-            }
-            rows.append(row)
-            previous_close = close
+        if df is not None and not df.empty:
+            for index, item in df.iterrows():
+                close = item.get("Close")
+                if close is None or pd.isna(close):
+                    continue
+                volume = item.get("Volume")
+                if volume is None or pd.isna(volume):
+                    volume = 0
+                pct_change = ""
+                if previous_close not in (None, 0):
+                    pct_change = _format_number(((close / previous_close) - 1) * 100)
+                rows.append({
+                    "date": index.strftime("%Y-%m-%d"),
+                    "code": symbol,
+                    "open": _format_number(item.get("Open")),
+                    "high": _format_number(item.get("High")),
+                    "low": _format_number(item.get("Low")),
+                    "close": _format_number(close),
+                    "preclose": _format_number(previous_close),
+                    "volume": _format_number(volume),
+                    "amount": _format_number(close * volume),
+                    "adjustflag": adjust_flag,
+                    "turn": "",
+                    "tradestatus": "1",
+                    "pctChg": pct_change,
+                    "peTTM": "",
+                    "pbMRQ": "",
+                    "psTTM": "",
+                    "pcfNcfTTM": "",
+                    "isST": "0",
+                    "adjClose": _format_number(close if auto_adjust else None),
+                })
+                previous_close = close
 
         if not rows:
+            sample_df = _static_price_history_df(symbol, adjust_flag, fields)
+            if not sample_df.empty:
+                logger.warning(f"No live price history for {symbol}; using static sample data.")
+                return sample_df
             raise NoDataFoundError(f"No historical market data found for {symbol}.")
 
         requested_fields = fields or DEFAULT_K_FIELDS
@@ -254,35 +328,35 @@ class USStockDataSource(FinancialDataSource):
 
     def get_dividend_data(self, code: str, year: str, year_type: str = "report") -> pd.DataFrame:
         symbol = normalize_us_symbol(code)
-        start = f"{year}-01-01"
-        end = f"{year}-12-31"
-        payload = self._chart_events(symbol, start, end, "div")
-        dividends = ((payload.get("events") or {}).get("dividends") or {}).values()
-        rows = [
-            {
-                "code": symbol,
-                "dividOperateDate": datetime.fromtimestamp(item["date"], timezone.utc).strftime("%Y-%m-%d"),
-                "dividCashPsBeforeTax": _format_number(item.get("amount")),
-                "year": year,
-            }
-            for item in dividends
-        ]
+        actions = yf_actions(symbol)
+        rows = []
+        if actions is not None and not actions.empty and "Dividends" in actions.columns:
+            for date, value in actions["Dividends"].items():
+                if value and not pd.isna(value) and str(getattr(date, "year", "")) == str(year):
+                    rows.append({
+                        "code": symbol,
+                        "dividOperateDate": date.strftime("%Y-%m-%d"),
+                        "dividCashPsBeforeTax": _format_number(value),
+                        "year": year,
+                    })
         return pd.DataFrame(rows or [{"code": symbol, "year": year, "message": "No dividend data found"}])
 
     def get_adjust_factor_data(self, code: str, start_date: str, end_date: str) -> pd.DataFrame:
         symbol = normalize_us_symbol(code)
-        payload = self._chart_events(symbol, start_date, end_date, "split")
-        splits = ((payload.get("events") or {}).get("splits") or {}).values()
-        rows = [
-            {
-                "code": symbol,
-                "date": datetime.fromtimestamp(item["date"], timezone.utc).strftime("%Y-%m-%d"),
-                "splitRatio": item.get("splitRatio", ""),
-                "numerator": item.get("numerator", ""),
-                "denominator": item.get("denominator", ""),
-            }
-            for item in splits
-        ]
+        actions = yf_actions(symbol)
+        start = datetime.strptime(start_date, "%Y-%m-%d").date()
+        end = datetime.strptime(end_date, "%Y-%m-%d").date()
+        rows = []
+        if actions is not None and not actions.empty and "Stock Splits" in actions.columns:
+            for date, value in actions["Stock Splits"].items():
+                if value and not pd.isna(value) and start <= date.date() <= end:
+                    rows.append({
+                        "code": symbol,
+                        "date": date.strftime("%Y-%m-%d"),
+                        "splitRatio": value,
+                        "numerator": "",
+                        "denominator": "",
+                    })
         return pd.DataFrame(rows or [{"code": symbol, "message": "No split adjustment events found"}])
 
     def get_profit_data(self, code: str, year: str, quarter: int) -> pd.DataFrame:
@@ -494,7 +568,9 @@ class USStockDataSource(FinancialDataSource):
     def crawl_news(self, query: str, top_k: int = 10) -> str:
         symbol_match = re.search(r"\b([A-Za-z]{1,5}(?:[.-][A-Za-z]{1,2})?)\b", query)
         symbol = normalize_us_symbol(symbol_match.group(1)) if symbol_match else None
-        results = self._crawl_yahoo_rss(symbol, top_k) if symbol else []
+        results = yf_news(symbol, top_k) if symbol else []
+        if not results and symbol:
+            results = self._crawl_yahoo_rss(symbol, top_k)
         if not results:
             results = self._crawl_duckduckgo_news(query, top_k)
         if not results:
@@ -515,136 +591,28 @@ class USStockDataSource(FinancialDataSource):
             output += f"   链接: {result.get('link', '')}\n\n"
         return output
 
-    def _get_json(self, url: str, params: Optional[Dict] = None) -> Dict:
-        try:
-            response = self.session.get(url, params=params, timeout=15)
-            response.raise_for_status()
-            return response.json()
-        except Exception as exc:
-            raise DataSourceError(f"Request failed for {url}: {exc}") from exc
-
     def _get_quote(self, symbol: str) -> Dict:
-        try:
-            payload = self._get_json("https://query1.finance.yahoo.com/v7/finance/quote", params={"symbols": symbol})
-        except DataSourceError as exc:
-            logger.warning(f"Yahoo quote lookup failed for {symbol}, using fallback basic info: {exc}")
+        info = yf_info(symbol)
+        if not info:
             return _fallback_quote(symbol)
-        results = (payload.get("quoteResponse") or {}).get("result") or []
-        return results[0] if results else _fallback_quote(symbol)
-
-    def _get_stooq_historical_k_data(
-        self,
-        symbol: str,
-        start_date: str,
-        end_date: str,
-        adjust_flag: str,
-        fields: Optional[List[str]],
-    ) -> pd.DataFrame:
-        stooq_symbol = f"{symbol.lower().replace('-', '.')}.us"
-        df = self._read_stooq_csv(
-            {
-                "s": stooq_symbol,
-                "d1": start_date.replace("-", ""),
-                "d2": end_date.replace("-", ""),
-                "i": "d",
-            }
-        )
-        if df.empty or "Close" not in df.columns:
-            logger.warning(f"No Stooq data for requested range {start_date} to {end_date}; requesting latest available data for {symbol}.")
-            df = self._read_stooq_csv({"s": stooq_symbol, "i": "d"})
-        if df.empty or "Close" not in df.columns:
-            logger.warning(f"No Stooq historical data found for {symbol}; using static sample data if available.")
-            sample_df = _static_price_history_df(symbol, adjust_flag, fields)
-            if not sample_df.empty:
-                return sample_df
-            raise NoDataFoundError(f"No Stooq historical market data found for {symbol}.")
-
-        rows = []
-        previous_close = None
-        for _, item in df.iterrows():
-            close = float(item["Close"])
-            volume = float(item.get("Volume", 0) or 0)
-            pct_change = ""
-            if previous_close not in (None, 0):
-                pct_change = _format_number(((close / previous_close) - 1) * 100)
-            rows.append(
-                {
-                    "date": str(item["Date"]),
-                    "code": symbol,
-                    "open": _format_number(item.get("Open")),
-                    "high": _format_number(item.get("High")),
-                    "low": _format_number(item.get("Low")),
-                    "close": _format_number(close),
-                    "preclose": _format_number(previous_close),
-                    "volume": _format_number(volume),
-                    "amount": _format_number(close * volume),
-                    "adjustflag": adjust_flag,
-                    "turn": "",
-                    "tradestatus": "1",
-                    "pctChg": pct_change,
-                    "peTTM": "",
-                    "pbMRQ": "",
-                    "psTTM": "",
-                    "pcfNcfTTM": "",
-                    "isST": "0",
-                    "adjClose": "",
-                }
-            )
-            previous_close = close
-
-        requested_fields = fields or DEFAULT_K_FIELDS
-        columns = [field for field in requested_fields if field in rows[0]]
-        if "adjClose" not in columns:
-            columns.append("adjClose")
-        return pd.DataFrame(rows)[columns]
-
-    def _read_stooq_csv(self, params: Dict[str, str]) -> pd.DataFrame:
-        try:
-            response = self.session.get("https://stooq.com/q/d/l/", params=params, timeout=15)
-            response.raise_for_status()
-            return pd.read_csv(StringIO(response.text))
-        except (pd.errors.EmptyDataError, Exception) as exc:
-            logger.warning(f"Stooq CSV request failed or returned no data: {exc}")
-            return pd.DataFrame()
-
-    def _quote_summary(self, symbol: str) -> Dict:
-        modules = "price,summaryProfile,defaultKeyStatistics,financialData,summaryDetail,calendarEvents"
-        try:
-            payload = self._get_json(
-                f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}",
-                params={"modules": modules},
-            )
-        except DataSourceError:
-            return {}
-        results = ((payload.get("quoteSummary") or {}).get("result") or [{}])[0]
-        return results or {}
+        return {
+            "symbol": info.get("symbol", symbol),
+            "shortName": info.get("shortName"),
+            "longName": info.get("longName"),
+            "quoteType": info.get("quoteType", "EQUITY"),
+            "marketState": info.get("marketState", "UNKNOWN"),
+            "fullExchangeName": info.get("fullExchangeName"),
+            "exchange": info.get("exchange", ""),
+            "currency": info.get("currency", "USD"),
+            "regularMarketPrice": info.get("regularMarketPrice") or info.get("currentPrice"),
+            "marketCap": info.get("marketCap"),
+        }
 
     def _fundamental_metrics(self, code: str) -> Dict:
+        # yfinance .info already exposes the financial ratios, margins, growth,
+        # balance-sheet, cash-flow and analyst fields under these exact keys.
         symbol = normalize_us_symbol(code)
-        quote = self._get_quote(symbol)
-        summary = self._quote_summary(symbol)
-        metrics = {}
-        for section_name in ["price", "summaryProfile", "defaultKeyStatistics", "financialData", "summaryDetail"]:
-            section = summary.get(section_name) or {}
-            for key, value in section.items():
-                metrics[key] = _raw_value(value)
-        metrics.update({key: value for key, value in quote.items() if key not in metrics})
-        calendar = summary.get("calendarEvents") or {}
-        earnings = calendar.get("earnings") or {}
-        earnings_dates = earnings.get("earningsDate") or []
-        if earnings_dates:
-            metrics["earningsDate"] = _raw_value(earnings_dates[0])
-        return metrics
-
-    def _chart_events(self, symbol: str, start_date: str, end_date: str, events: str) -> Dict:
-        period1 = int(datetime.strptime(start_date, "%Y-%m-%d").timestamp())
-        period2 = int((datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)).timestamp())
-        payload = self._get_json(
-            f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
-            params={"period1": period1, "period2": period2, "interval": "1d", "events": events},
-        )
-        results = (payload.get("chart") or {}).get("result") or []
-        return results[0] if results else {}
+        return dict(yf_info(symbol))
 
     def _crawl_yahoo_rss(self, symbol: str, top_k: int) -> List[Dict]:
         try:
