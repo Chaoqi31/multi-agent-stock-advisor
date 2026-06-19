@@ -21,6 +21,49 @@ This is an **analysis advisor** — it generates research only and never places 
 - **Optional local models** — Qwen-LoRA news scoring is off by default; the LLM API handles
   sentiment/risk so it runs with no GPU.
 
+## Architecture
+
+```mermaid
+flowchart TD
+    START([▶ start]) --> MEM[retrieve_memory<br/>inject similar past situations]
+
+    MEM --> F[fundamental analyst]
+    MEM --> T[technical analyst]
+    MEM --> V[valuation analyst]
+    MEM --> N[news analyst]
+
+    F --> J{{"debate_start join"}}
+    T --> J
+    V --> J
+    N --> J
+
+    J --> BULL[bull researcher]
+    BULL --> BEAR[bear researcher]
+    BEAR -->|count &lt; 2 × rounds| BULL
+    BEAR -->|count ≥ 2 × rounds| RM[research manager<br/>balanced conclusion]
+    RM --> RISK[risk disclosure]
+    RISK --> SUM[summarizer]
+    SUM --> RPT([📄 Chinese report])
+
+    MCP[(MCP server<br/>27 data tools)] -. ReAct tool calls .-> F
+    MCP -.-> T
+    MCP -.-> V
+    MCP -.-> N
+    MEM <-. retrieve .-> MEMDB[(advisory memory<br/>ChromaDB)]
+    SUM -. store situation .-> MEMDB
+
+    classDef analyst fill:#e8f0fe,stroke:#4285f4;
+    classDef debate fill:#fef7e0,stroke:#f9ab00;
+    classDef io fill:#e6f4ea,stroke:#34a853;
+    class F,T,V,N analyst;
+    class BULL,BEAR,RM,RISK debate;
+    class MCP,MEMDB,RPT io;
+```
+
+Every node is checkpointed to SQLite by `thread_id`, so an interrupted run resumes from the last
+completed step. The four analysts run in parallel; the bull/bear loop is bounded by
+`MAX_DEBATE_ROUNDS`. The report stays in Simplified Chinese while the codebase is English.
+
 ## Quickstart
 
 ```bash
