@@ -125,6 +125,47 @@ def yf_news(symbol: str, top_k: int = 10) -> List[Dict]:
     return items
 
 
+def fred_series(series_id: str, start: Optional[str], end: Optional[str], max_rows: int = 36) -> pd.DataFrame:
+    """Cached FRED macro time series via the key-free CSV endpoint. Columns: date, value."""
+    key = ("fred", series_id, start, end, max_rows)
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+    df = pd.DataFrame()
+    try:
+        response = requests.get(
+            "https://fred.stlouisfed.org/graph/fredgraph.csv",
+            params={"id": series_id},
+            timeout=15,
+        )
+        response.raise_for_status()
+        parsed = pd.read_csv(StringIO(response.text))
+        parsed.columns = ["date", "value"][: len(parsed.columns)]
+        parsed["value"] = pd.to_numeric(parsed["value"], errors="coerce")
+        parsed = parsed.dropna(subset=["value"])
+        if start:
+            parsed = parsed[parsed["date"] >= start]
+        if end:
+            parsed = parsed[parsed["date"] <= end]
+        df = parsed.tail(max_rows).reset_index(drop=True)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"FRED lookup failed for {series_id}: {exc}")
+        df = pd.DataFrame()
+    return _cache_set(key, df)
+
+
+def _macro_series_df(series_id: str, label: str, start: Optional[str], end: Optional[str], max_rows: int = 36) -> pd.DataFrame:
+    df = fred_series(series_id, start, end, max_rows)
+    if df.empty:
+        return _macro_placeholder(f"{label} (FRED:{series_id})", start, end)
+    return pd.DataFrame(
+        [
+            {"metric": label, "series_id": series_id, "date": row["date"], "value": row["value"]}
+            for _, row in df.iterrows()
+        ]
+    )
+
+
 DEFAULT_K_FIELDS = [
     "date",
     "code",
@@ -535,10 +576,11 @@ class USStockDataSource(FinancialDataSource):
         return pd.DataFrame(rows)
 
     def get_deposit_rate_data(self, start_date: Optional[str] = None, end_date: Optional[str] = None) -> pd.DataFrame:
-        return _macro_placeholder("US bank deposit rates", start_date, end_date)
+        # No retail deposit-rate series in FRED; the Federal Funds Rate is the US policy-rate proxy.
+        return _macro_series_df("FEDFUNDS", "US Federal Funds Rate (%)", start_date, end_date)
 
     def get_loan_rate_data(self, start_date: Optional[str] = None, end_date: Optional[str] = None) -> pd.DataFrame:
-        return _macro_placeholder("US prime/lending rates", start_date, end_date)
+        return _macro_series_df("MPRIME", "US Bank Prime Loan Rate (%)", start_date, end_date)
 
     def get_required_reserve_ratio_data(
         self,
@@ -547,13 +589,34 @@ class USStockDataSource(FinancialDataSource):
         year_type: str = "0",
         **kwargs,
     ) -> pd.DataFrame:
-        return _macro_placeholder("US reserve requirement ratio", start_date, end_date)
+        # The Federal Reserve eliminated reserve requirements (set the ratio to 0%) in March 2020.
+        return pd.DataFrame(
+            [
+                {
+                    "metric": "US reserve requirement ratio",
+                    "value": "0%",
+                    "effective_date": "2020-03-26",
+                    "note": "The Federal Reserve reduced reserve requirement ratios to 0% effective 2020-03-26.",
+                }
+            ]
+        )
 
     def get_money_supply_data_month(self, start_date: Optional[str] = None, end_date: Optional[str] = None) -> pd.DataFrame:
-        return _macro_placeholder("US money supply monthly", start_date, end_date)
+        return _macro_series_df("M2SL", "US M2 Money Stock ($B, seasonally adjusted)", start_date, end_date)
 
     def get_money_supply_data_year(self, start_date: Optional[str] = None, end_date: Optional[str] = None) -> pd.DataFrame:
-        return _macro_placeholder("US money supply yearly", start_date, end_date)
+        df = fred_series("M2SL", start_date, end_date, max_rows=2400)
+        if df.empty:
+            return _macro_placeholder("US M2 Money Stock yearly (FRED:M2SL)", start_date, end_date)
+        yearly = df[df["date"].str.endswith("-12-01")]
+        if yearly.empty:
+            yearly = df
+        return pd.DataFrame(
+            [
+                {"metric": "US M2 Money Stock ($B, year-end)", "series_id": "M2SL", "year": row["date"][:4], "value": row["value"]}
+                for _, row in yearly.tail(12).iterrows()
+            ]
+        )
 
     def crawl_news(self, query: str, top_k: int = 10) -> str:
         symbol_match = re.search(r"\b([A-Za-z]{1,5}(?:[.-][A-Za-z]{1,2})?)\b", query)
