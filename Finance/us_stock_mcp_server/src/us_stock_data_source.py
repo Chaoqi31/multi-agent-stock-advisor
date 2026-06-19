@@ -210,16 +210,6 @@ NASDAQ_100_SAMPLE = [
     "CSCO",
 ]
 
-STATIC_PRICE_HISTORY = {
-    "AAPL": [
-        {"date": "2024-01-02", "open": 187.15, "high": 188.44, "low": 183.89, "close": 185.64, "volume": 82488700},
-        {"date": "2024-01-03", "open": 184.22, "high": 185.88, "low": 183.43, "close": 184.25, "volume": 58414500},
-    ],
-    "MSFT": [
-        {"date": "2024-01-02", "open": 373.86, "high": 375.90, "low": 366.77, "close": 370.87, "volume": 25258600},
-        {"date": "2024-01-03", "open": 369.01, "high": 373.26, "low": 368.51, "close": 370.60, "volume": 23083500},
-    ],
-}
 
 
 class USStockDataSource(FinancialDataSource):
@@ -288,11 +278,11 @@ class USStockDataSource(FinancialDataSource):
                 previous_close = close
 
         if not rows:
-            sample_df = _static_price_history_df(symbol, adjust_flag, fields)
-            if not sample_df.empty:
-                logger.warning(f"No live price history for {symbol}; using static sample data.")
-                return sample_df
-            raise NoDataFoundError(f"No historical market data found for {symbol}.")
+            # Be explicit about missing data rather than substituting stale samples, so the
+            # model reports the gap instead of presenting old prices as current.
+            raise NoDataFoundError(
+                f"No live price history available for {symbol} between {start_date} and {end_date}."
+            )
 
         requested_fields = fields or DEFAULT_K_FIELDS
         columns = [field for field in requested_fields if field in rows[0]]
@@ -847,53 +837,6 @@ def _fallback_quote(symbol: str) -> Dict:
         "quoteType": "EQUITY",
         "marketState": "UNKNOWN",
     }
-
-
-def _static_price_history_df(symbol: str, adjust_flag: str, fields: Optional[List[str]]) -> pd.DataFrame:
-    history = STATIC_PRICE_HISTORY.get(symbol, [])
-    if not history:
-        return pd.DataFrame()
-
-    rows = []
-    previous_close = None
-    for item in history:
-        close = item["close"]
-        volume = item["volume"]
-        pct_change = ""
-        if previous_close not in (None, 0):
-            pct_change = _format_number(((close / previous_close) - 1) * 100)
-        rows.append(
-            {
-                "date": item["date"],
-                "code": symbol,
-                "open": _format_number(item["open"]),
-                "high": _format_number(item["high"]),
-                "low": _format_number(item["low"]),
-                "close": _format_number(close),
-                "preclose": _format_number(previous_close),
-                "volume": _format_number(volume),
-                "amount": _format_number(close * volume),
-                "adjustflag": adjust_flag,
-                "turn": "",
-                "tradestatus": "1",
-                "pctChg": pct_change,
-                "peTTM": "",
-                "pbMRQ": "",
-                "psTTM": "",
-                "pcfNcfTTM": "",
-                "isST": "0",
-                "adjClose": "",
-                "dataSource": "static_sample",
-            }
-        )
-        previous_close = close
-
-    requested_fields = fields or DEFAULT_K_FIELDS
-    columns = [field for field in requested_fields if field in rows[0]]
-    for optional in ["adjClose", "dataSource"]:
-        if optional not in columns:
-            columns.append(optional)
-    return pd.DataFrame(rows)[columns]
 
 
 def _macro_placeholder(metric: str, start_date: Optional[str], end_date: Optional[str]) -> pd.DataFrame:
