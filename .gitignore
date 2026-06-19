@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# Environment / secrets
+.env
+
+# Runtime artifacts
+logs/
+reports/
+checkpoints/
+*.sqlite
+*.sqlite3
+.chroma/
+
+# Local models / large training artifacts (training runs on a GPU host)
+Qwen/
+qwen_risk_model/
+qwen_sentiment_model/
+*.safetensors
+*.bin
+
+# OS / editor
+.DS_Store
+*.swp
+*~
+
+# Media
+*.mp4
