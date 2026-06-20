@@ -92,5 +92,3 @@ uv run streamlit run app.py
 
 Only an OpenAI-compatible API key is required to run locally. The optional Qwen-LoRA news
 scoring models are disabled by default (no GPU needed).
-
-
