@@ -1,0 +1,128 @@
+<svg viewBox="0 0 900 700" xmlns="http://www.w3.org/2000/svg" role="img" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif">
+  <title>US Equity Advisor Agent architecture</title>
+  <desc>Pipeline: memory retrieval, four parallel analysts, bull/bear debate, research manager, risk disclosure, summarizer to report, with MCP data tools and ChromaDB memory.</desc>
+  <defs>
+    <marker id="arr" markerWidth="9" markerHeight="9" refX="6.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#94a3b8"/></marker>
+    <marker id="darr" markerWidth="9" markerHeight="9" refX="6.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L7,3 L0,6 Z" fill="#8b5cf6"/></marker>
+    <marker id="darrs" markerWidth="9" markerHeight="9" refX="0.5" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M7,0 L0,3 L7,6 Z" fill="#8b5cf6"/></marker>
+  </defs>
+  <style>
+    .t{font-size:13.5px;font-weight:600;fill:#0f172a}
+    .s{font-size:10.5px;fill:#64748b}
+    .lbl{font-size:10px;fill:#8b5cf6;font-weight:600}
+    .ttl{font-size:18px;font-weight:700;fill:#0f172a}
+    .sub{font-size:11.5px;fill:#64748b}
+    .leg{font-size:11px;fill:#475569}
+    .ln{stroke:#94a3b8;stroke-width:1.6;fill:none}
+    .dln{stroke:#8b5cf6;stroke-width:1.4;stroke-dasharray:4 3;fill:none}
+  </style>
+
+  <rect x="6" y="6" width="888" height="688" rx="14" fill="#ffffff" stroke="#e5e7eb"/>
+
+  <text x="30" y="40" class="ttl">US Equity Advisor Agent</text>
+  <text x="30" y="60" class="sub">Multi-agent research pipeline · analysis only, no trading</text>
+
+  <g transform="translate(548,30)">
+    <rect x="0" y="0" width="12" height="12" rx="3" fill="#eff6ff" stroke="#3b82f6"/><text x="17" y="10" class="leg">Analyst</text>
+    <rect x="78" y="0" width="12" height="12" rx="3" fill="#fffbeb" stroke="#f59e0b"/><text x="95" y="10" class="leg">Debate</text>
+    <rect x="158" y="0" width="12" height="12" rx="3" fill="#f5f3ff" stroke="#8b5cf6"/><text x="175" y="10" class="leg">Data</text>
+    <rect x="226" y="0" width="12" height="12" rx="3" fill="#ecfdf5" stroke="#10b981"/><text x="243" y="10" class="leg">I/O</text>
+  </g>
+
+  <rect x="230" y="86" width="140" height="32" rx="16" fill="#ecfdf5" stroke="#10b981"/>
+  <text x="300" y="106" text-anchor="middle" class="t" fill="#065f46">▶ start</text>
+  <path class="ln" d="M300,118 L300,144" marker-end="url(#arr)"/>
+
+  <rect x="208" y="146" width="184" height="44" rx="9" fill="#f8fafc" stroke="#64748b"/>
+  <text x="300" y="166" text-anchor="middle" class="t">retrieve_memory</text>
+  <text x="300" y="181" text-anchor="middle" class="s">inject similar past situations</text>
+
+  <path class="ln" d="M300,190 L300,204"/>
+  <path class="ln" d="M91,204 L511,204"/>
+  <path class="ln" d="M91,204 L91,216" marker-end="url(#arr)"/>
+  <path class="ln" d="M231,204 L231,216" marker-end="url(#arr)"/>
+  <path class="ln" d="M371,204 L371,216" marker-end="url(#arr)"/>
+  <path class="ln" d="M511,204 L511,216" marker-end="url(#arr)"/>
+
+  <text x="301" y="210" text-anchor="middle" class="s">4 analysts · parallel (ReAct)</text>
+  <g>
+    <rect x="26" y="218" width="130" height="46" rx="9" fill="#eff6ff" stroke="#3b82f6"/>
+    <text x="91" y="240" text-anchor="middle" class="t" fill="#1e3a8a">fundamental</text>
+    <text x="91" y="255" text-anchor="middle" class="s">financials</text>
+    <rect x="166" y="218" width="130" height="46" rx="9" fill="#eff6ff" stroke="#3b82f6"/>
+    <text x="231" y="240" text-anchor="middle" class="t" fill="#1e3a8a">technical</text>
+    <text x="231" y="255" text-anchor="middle" class="s">price / volume</text>
+    <rect x="306" y="218" width="130" height="46" rx="9" fill="#eff6ff" stroke="#3b82f6"/>
+    <text x="371" y="240" text-anchor="middle" class="t" fill="#1e3a8a">valuation</text>
+    <text x="371" y="255" text-anchor="middle" class="s">P/E · P/B · yield</text>
+    <rect x="446" y="218" width="130" height="46" rx="9" fill="#eff6ff" stroke="#3b82f6"/>
+    <text x="511" y="240" text-anchor="middle" class="t" fill="#1e3a8a">news</text>
+    <text x="511" y="255" text-anchor="middle" class="s">sentiment · risk</text>
+  </g>
+
+  <path class="ln" d="M91,264 L91,278"/>
+  <path class="ln" d="M231,264 L231,278"/>
+  <path class="ln" d="M371,264 L371,278"/>
+  <path class="ln" d="M511,264 L511,278"/>
+  <path class="ln" d="M91,278 L511,278"/>
+  <path class="ln" d="M300,278 L300,292" marker-end="url(#arr)"/>
+
+  <rect x="225" y="294" width="150" height="26" rx="7" fill="#f8fafc" stroke="#64748b"/>
+  <text x="300" y="311" text-anchor="middle" class="t" font-size="12">debate_start · join</text>
+  <path class="ln" d="M300,320 L300,344" marker-end="url(#arr)"/>
+
+  <rect x="150" y="346" width="150" height="46" rx="9" fill="#fffbeb" stroke="#f59e0b"/>
+  <text x="225" y="368" text-anchor="middle" class="t" fill="#92400e">🐂 bull researcher</text>
+  <text x="225" y="383" text-anchor="middle" class="s">bullish case</text>
+  <rect x="320" y="346" width="150" height="46" rx="9" fill="#fffbeb" stroke="#f59e0b"/>
+  <text x="395" y="368" text-anchor="middle" class="t" fill="#92400e">🐻 bear researcher</text>
+  <text x="395" y="383" text-anchor="middle" class="s">bearish case</text>
+  <path class="ln" d="M300,360 L318,360" marker-end="url(#arr)"/>
+  <path class="ln" d="M318,378 L302,378" marker-end="url(#arr)"/>
+  <text x="310" y="338" text-anchor="middle" class="s" fill="#92400e">↺ ≤ MAX_DEBATE_ROUNDS</text>
+
+  <path class="ln" d="M310,392 L300,420" marker-end="url(#arr)"/>
+
+  <rect x="208" y="422" width="184" height="44" rx="9" fill="#fffbeb" stroke="#f59e0b"/>
+  <text x="300" y="442" text-anchor="middle" class="t" fill="#92400e">research_manager</text>
+  <text x="300" y="457" text-anchor="middle" class="s">balanced conclusion</text>
+  <path class="ln" d="M300,466 L300,482" marker-end="url(#arr)"/>
+
+  <rect x="208" y="484" width="184" height="42" rx="9" fill="#fffbeb" stroke="#f59e0b"/>
+  <text x="300" y="503" text-anchor="middle" class="t" fill="#92400e">risk_disclosure</text>
+  <text x="300" y="518" text-anchor="middle" class="s">risk factors · disclaimers</text>
+  <path class="ln" d="M300,526 L300,542" marker-end="url(#arr)"/>
+
+  <rect x="208" y="544" width="184" height="42" rx="9" fill="#f8fafc" stroke="#64748b"/>
+  <text x="300" y="563" text-anchor="middle" class="t">summarizer</text>
+  <text x="300" y="578" text-anchor="middle" class="s">final Chinese report</text>
+  <path class="ln" d="M300,586 L300,602" marker-end="url(#arr)"/>
+
+  <rect x="228" y="604" width="144" height="34" rx="17" fill="#ecfdf5" stroke="#10b981"/>
+  <text x="300" y="625" text-anchor="middle" class="t" fill="#065f46">📄 report</text>
+
+  <g>
+    <ellipse cx="730" cy="222" rx="108" ry="13" fill="#f5f3ff" stroke="#8b5cf6"/>
+    <path d="M622,222 L622,278" stroke="#8b5cf6" fill="none"/>
+    <path d="M838,222 L838,278" stroke="#8b5cf6" fill="none"/>
+    <path d="M622,278 A108,13 0 0 0 838,278" fill="none" stroke="#8b5cf6"/>
+    <text x="730" y="244" text-anchor="middle" class="t" fill="#5b21b6">MCP server</text>
+    <text x="730" y="260" text-anchor="middle" class="s">27 tools · yfinance · FRED</text>
+    <text x="730" y="274" text-anchor="middle" class="s">real market data</text>
+  </g>
+  <path class="dln" d="M622,250 L580,241" marker-end="url(#darr)"/>
+  <text x="600" y="232" text-anchor="middle" class="lbl">tool calls</text>
+
+  <g>
+    <ellipse cx="710" cy="446" rx="92" ry="12" fill="#f5f3ff" stroke="#8b5cf6"/>
+    <path d="M618,446 L618,494" stroke="#8b5cf6" fill="none"/>
+    <path d="M802,446 L802,494" stroke="#8b5cf6" fill="none"/>
+    <path d="M618,494 A92,12 0 0 0 802,494" fill="none" stroke="#8b5cf6"/>
+    <text x="710" y="466" text-anchor="middle" class="t" fill="#5b21b6">advisory memory</text>
+    <text x="710" y="481" text-anchor="middle" class="s">ChromaDB · reflection</text>
+  </g>
+  <path class="dln" d="M618,462 L394,452" marker-start="url(#darrs)" marker-end="url(#darr)"/>
+  <text x="500" y="446" text-anchor="middle" class="lbl">retrieve / store</text>
+
+  <text x="30" y="666" class="s">Every node is checkpointed to SQLite by thread_id — an interrupted run resumes from the last completed step.</text>
+</svg>
