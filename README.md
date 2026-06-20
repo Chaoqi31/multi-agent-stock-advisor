@@ -72,12 +72,12 @@ completed step. The four analysts run in parallel; the bull/bear loop is bounded
 
 ```bash
 # 1. Configure the LLM API
-cd Finance/Financial-MCP-Agent
+cd agent
 cp .env.example .env          # set OPENAI_COMPATIBLE_API_KEY / _BASE_URL / _MODEL
 
 # 2. Install dependencies (two self-contained uv projects)
-cd ../us_stock_mcp_server && uv sync
-cd ../Financial-MCP-Agent && uv sync
+cd ../mcp_server && uv sync
+cd ../agent && uv sync
 
 # 3. Run an analysis (prints a thread_id you can resume/reflect on)
 uv run python src/main.py --command "分析 Apple (AAPL)"

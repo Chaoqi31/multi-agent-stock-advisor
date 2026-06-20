@@ -28,21 +28,21 @@ print(f"Using device: {device}")
 def load_and_preprocess_data(csv_path):
     """Load and preprocess data"""
     print("Loading data...")
-    df = pd.read_csv(csv_path)[:1000]  # Limit the number of samples
+    df = pd.read_csv(csv_path)[:1000]
 
     # Filter for valid data
-    df = df[df['Lsa_summary'].notna() & df['risk_deepseek'].notna()]
-    df = df[df['risk_deepseek'] != 0]  # Remove invalid risk labels
+    df = df[df['Lsa_summary'].notna() & df['sentiment_deepseek'].notna()]
+    df = df[df['sentiment_deepseek'] != 0]  # Remove invalid sentiment labels
 
     print(f"Number of valid samples: {len(df)}")
-    print(f"Risk distribution: {df['risk_deepseek'].value_counts().sort_index()}")
+    print(f"Sentiment distribution: {df['sentiment_deepseek'].value_counts().sort_index()}")
 
     return df
 
-def create_prompt_template(text, risk_score, stock_symbol="STOCK"):
-    """Create the training prompt template - uses the risk assessment format"""
-    # Use the same conversation format as risk_deepseek_deepinfra.py
-    system_prompt = "Forget all your previous instructions. You are a financial expert specializing in risk assessment for stock recommendations. Based on a specific stock, provide a risk score from 1 to 5, where: 1 indicates very low risk, 2 indicates low risk, 3 indicates moderate risk (default if the news lacks any clear indication of risk), 4 indicates high risk, and 5 indicates very high risk. 1 summarized news will be passed in each time. Provide the score in the format shown below in the response from the assistant."
+def create_prompt_template(text, sentiment, stock_symbol="STOCK"):
+    """Create the training prompt template"""
+    # Use the same conversation format as sentiment_deepseek_deepinfra.py
+    system_prompt = "Forget all your previous instructions. You are a financial expert with stock recommendation experience. Based on a specific stock, score for range from 1 to 5, where 1 is negative, 2 is somewhat negative, 3 is neutral, 4 is somewhat positive, 5 is positive. 1 summarized news will be passed in each time, you will give score in format as shown below in the response from assistant."
 
     # Build the user input
     user_content = f"News to Stock Symbol -- {stock_symbol}: {text}"
@@ -50,17 +50,17 @@ def create_prompt_template(text, risk_score, stock_symbol="STOCK"):
     # Build the full conversation
     conversation = f"""System: {system_prompt}
 
-User: News to Stock Symbol -- AAPL: Apple (AAPL) increases 22%
-Assistant: 3
+User: News to Stock Symbol -- AAPL: Apple (AAPL) increase 22%
+Assistant: 5
 
 User: News to Stock Symbol -- AAPL: Apple (AAPL) price decreased 30%
-Assistant: 4
+Assistant: 1
 
 User: News to Stock Symbol -- AAPL: Apple (AAPL) announced iPhone 15
-Assistant: 3
+Assistant: 4
 
 User: {user_content}
-Assistant: {risk_score}"""
+Assistant: {sentiment}"""
     
     return conversation
 
@@ -73,15 +73,15 @@ def prepare_dataset(df, tokenizer, max_length=512):
 
     for _, row in df.iterrows():
         text = row['Lsa_summary']
-        risk_score = int(row['risk_deepseek'])
+        sentiment = int(row['sentiment_deepseek'])
         stock_symbol = row.get('Stock_symbol', 'STOCK')  # Get the stock symbol, falling back to a default if absent
 
         if pd.isna(text) or text == '':
             continue
 
-        prompt = create_prompt_template(text, risk_score, stock_symbol)
+        prompt = create_prompt_template(text, sentiment, stock_symbol)
         texts.append(prompt)
-        labels.append(risk_score)
+        labels.append(sentiment)
 
     # Split into training and validation sets (80% train, 20% validation)
     train_texts, eval_texts, train_labels, eval_labels = train_test_split(
@@ -219,7 +219,7 @@ def create_model_and_tokenizer():
 
     return model, tokenizer
 
-def train_model(model, tokenizer, train_dataset, eval_dataset, output_dir=os.getenv("QWEN_RISK_MODEL", "./qwen_risk_model")):
+def train_model(model, tokenizer, train_dataset, eval_dataset, output_dir=os.getenv("QWEN_SENTIMENT_MODEL", "./qwen_sentiment_model")):
     """Train the model"""
     print("Starting model training...")
 
@@ -272,7 +272,7 @@ def train_model(model, tokenizer, train_dataset, eval_dataset, output_dir=os.get
 def main():
     """Main function"""
     # Dataset path
-    csv_path = os.path.join(os.getenv("DATA_DIR", "risk_nasdaq"), "risk_deepseek_cleaned_nasdaq_news_full.csv")
+    csv_path = os.path.join(os.getenv("DATA_DIR", "datasets/nasdaq_news_sentiment"), "sentiment_deepseek_new_cleaned_nasdaq_news_full.csv")
 
     # Load and preprocess data
     df = load_and_preprocess_data(csv_path)

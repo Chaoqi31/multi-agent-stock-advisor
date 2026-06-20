@@ -8,9 +8,9 @@ if the server lives elsewhere.
 import os
 from pathlib import Path
 
-# This file lives at <repo>/Finance/Financial-MCP-Agent/src/tools/mcp_config.py
-# parents[3] -> <repo>/Finance, which also contains the MCP server package.
-_DEFAULT_SERVER_DIR = Path(__file__).resolve().parents[3] / "us_stock_mcp_server"
+# This file lives at <repo>/agent/src/tools/mcp_config.py; the mcp_server package
+# is a sibling of the agent directory, at <repo>/mcp_server.
+_DEFAULT_SERVER_DIR = Path(__file__).resolve().parents[2].parent / "mcp_server"
 _SERVER_DIR = os.getenv("MCP_SERVER_DIR", str(_DEFAULT_SERVER_DIR))
 
 SERVER_CONFIGS = {
