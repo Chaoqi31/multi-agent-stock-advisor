@@ -34,3 +34,6 @@ qwen_sentiment_model/
 
 # Media
 *.mp4
+
+# Local notes / resume material (kept local, never published)
+docs/
